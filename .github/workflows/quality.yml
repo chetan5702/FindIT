@@ -1,0 +1,113 @@
+name: FindIt quality gates
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pytest -q
+      - run: python -m compileall -q app alembic tests
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - run: npm run test:run
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: findit_test
+          POSTGRES_PASSWORD: test-only-password
+          POSTGRES_DB: findit_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U findit_test -d findit_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      FINDIT_DATABASE_URL: postgresql+psycopg://findit_test:test-only-password@localhost:5432/findit_test
+      FINDIT_TEST_DATABASE_URL: postgresql+psycopg://findit_test:test-only-password@localhost:5432/findit_test
+      FINDIT_ENVIRONMENT: test
+      FINDIT_REQUIRE_EMAIL_VERIFICATION: "true"
+      FINDIT_ALLOWED_EMAIL_DOMAINS: '["suh.edu.in"]'
+      FINDIT_MAIL_BACKEND: file
+      FINDIT_MAIL_DIRECTORY: /tmp/findit-test-mail
+      FINDIT_PUBLIC_BASE_URL: http://127.0.0.1:5173
+      FINDIT_E2E_STAFF_EMAIL: staff@suh.edu.in
+      FINDIT_E2E_STAFF_PASSWORD: EphemeralBrowserTest123!
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m alembic upgrade head
+      - run: python -m alembic check
+      - run: python -m pytest -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m app.e2e_fixture
+      - name: Start test API
+        run: |
+          export FINDIT_MEDIA_ROOT="$RUNNER_TEMP/findit-media"
+          python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > "$RUNNER_TEMP/findit-api.log" 2>&1 &
+      - run: npm ci --no-audit --no-fund
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - run: npm run test:e2e -- --workers=1
+        working-directory: frontend
+        env:
+          VITE_PROXY_TARGET: http://127.0.0.1:8000
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-failure-traces
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+
+  production-containers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --no-audit --no-fund
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Verify production HTTPS, SMTP, workflow, backup and restore
+        run: python scripts/verify_containers.py

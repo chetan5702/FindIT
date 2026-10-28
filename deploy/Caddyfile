@@ -1,0 +1,15 @@
+# Point public DNS to this server before launching. Caddy provisions TLS automatically.
+{$FINDIT_DOMAIN} {
+    encode zstd gzip
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        -Server
+    }
+    request_body {
+        max_size 12MB
+    }
+    reverse_proxy frontend:80 {
+        # Overwrite client-supplied identity headers at the sole public ingress.
+        header_up X-Real-IP {remote_host}
+    }
+}

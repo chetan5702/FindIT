@@ -1,0 +1,4 @@
+FROM python:3.12.8-slim-bookworm
+RUN pip install --no-cache-dir aiosmtpd==1.4.6
+COPY smtp_sink.py /app/smtp_sink.py
+CMD ["python", "/app/smtp_sink.py"]

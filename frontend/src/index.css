@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root { color-scheme: light; font-synthesis: none; }
+  * { @apply border-slate-200; }
+  html { @apply scroll-smooth bg-cream-50; }
+  body { @apply m-0 min-h-screen bg-cream-50 font-sans text-slate-800 antialiased; }
+  h1, h2, h3, h4 { @apply font-display text-ink-950; }
+  button, a, input, select, textarea { @apply outline-none; }
+  :focus-visible { @apply ring-2 ring-pine-500 ring-offset-2 ring-offset-cream-50; }
+  ::selection { @apply bg-pine-200 text-ink-950; }
+}
+
+@layer components {
+  .skip-link { @apply fixed left-3 top-3 z-[100] -translate-y-20 rounded-lg bg-ink-950 px-4 py-2 text-sm font-semibold text-white transition-transform focus:translate-y-0; }
+  .surface { @apply rounded-2xl border border-white/70 bg-white shadow-card; }
+  .page-wrap { @apply mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8; }
+  .field-label { @apply mb-1.5 block text-sm font-semibold text-slate-700; }
+  .field-help { @apply mt-1.5 text-xs leading-5 text-slate-500; }
+  .field-error { @apply mt-1.5 text-xs font-medium text-red-600; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: white !important; }
+  .print-card { box-shadow: none !important; border: 0 !important; }
+}

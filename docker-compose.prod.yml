@@ -1,0 +1,151 @@
+# Production topology: Caddy terminates HTTPS; only the gateway publishes host ports.
+# Do not use the development compose file or publish the database/API to the public internet.
+name: findit-production
+
+services:
+  db:
+    image: postgres:16.6-alpine3.20
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    networks: [database]
+
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      FINDIT_ENVIRONMENT: test
+      FINDIT_DATABASE_URL: ${FINDIT_DATABASE_URL:?Set FINDIT_DATABASE_URL}
+      FINDIT_AUTO_MIGRATE: "false"
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [database]
+    restart: "no"
+    read_only: true
+    tmpfs: ["/tmp:size=64m,noexec,nosuid"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      FINDIT_ENVIRONMENT: production
+      FINDIT_ALLOWED_EMAIL_DOMAINS: ${FINDIT_ALLOWED_EMAIL_DOMAINS:-["suh.edu.in"]}
+      FINDIT_REQUIRE_EMAIL_VERIFICATION: "true"
+      FINDIT_MAIL_BACKEND: smtp
+      FINDIT_MAIL_FROM: ${FINDIT_MAIL_FROM:?Set verified sender}
+      FINDIT_SMTP_HOST: ${FINDIT_SMTP_HOST:?Set SMTP host}
+      FINDIT_SMTP_PORT: ${FINDIT_SMTP_PORT:-587}
+      FINDIT_SMTP_SECURITY: ${FINDIT_SMTP_SECURITY:-starttls}
+      FINDIT_SMTP_USERNAME: ${FINDIT_SMTP_USERNAME:-}
+      FINDIT_SMTP_PASSWORD: ${FINDIT_SMTP_PASSWORD:-}
+      # Trust forwarded identity only in this unpublished, private backend topology.
+      # Caddy overwrites X-Real-IP and Nginx forwards that single client address.
+      FORWARDED_ALLOW_IPS: ${FINDIT_PROXY_SUBNET:-172.30.90.0/28}
+      FINDIT_AUTO_MIGRATE: "false"
+      FINDIT_DATABASE_URL: ${FINDIT_DATABASE_URL:?Set FINDIT_DATABASE_URL}
+      FINDIT_SECRET_KEY: ${FINDIT_SECRET_KEY:?Set FINDIT_SECRET_KEY}
+      FINDIT_COOKIE_SECURE: "true"
+      FINDIT_ALLOWED_ORIGINS: ${FINDIT_ALLOWED_ORIGINS:?Set HTTPS origins}
+      FINDIT_TRUSTED_HOSTS: ${FINDIT_TRUSTED_HOSTS:?Set trusted hosts}
+      FINDIT_PUBLIC_BASE_URL: ${FINDIT_PUBLIC_BASE_URL:?Set HTTPS public URL}
+      FINDIT_MEDIA_ROOT: /data/media
+      FINDIT_LOGIN_ATTEMPT_LIMIT: ${FINDIT_LOGIN_ATTEMPT_LIMIT:-8}
+      FINDIT_LOGIN_IP_ATTEMPT_LIMIT: ${FINDIT_LOGIN_IP_ATTEMPT_LIMIT:-40}
+      FINDIT_REGISTRATION_ATTEMPT_LIMIT: ${FINDIT_REGISTRATION_ATTEMPT_LIMIT:-20}
+      FINDIT_LOGIN_ATTEMPT_WINDOW_SECONDS: ${FINDIT_LOGIN_ATTEMPT_WINDOW_SECONDS:-300}
+      FINDIT_MAX_CLAIM_EVIDENCE_IMAGES: ${FINDIT_MAX_CLAIM_EVIDENCE_IMAGES:-5}
+      FINDIT_MAX_USER_UPLOAD_BYTES: ${FINDIT_MAX_USER_UPLOAD_BYTES:-104857600}
+    volumes:
+      - media_data:/data/media
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks: [application, database, proxy]
+    read_only: true
+    tmpfs: ["/tmp:size=64m,noexec,nosuid"]
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.healthcheck"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    init: true
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+      args:
+        VITE_API_URL: ""
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [proxy, edge]
+    read_only: true
+    tmpfs: ["/var/cache/nginx:size=64m", "/var/run:size=4m"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  gateway:
+    image: caddy:2.9.1-alpine
+    environment:
+      FINDIT_DOMAIN: ${FINDIT_DOMAIN:?Set public DNS hostname for automatic HTTPS}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      frontend:
+        condition: service_healthy
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    networks: [edge, application]
+
+networks:
+  application: {}
+  edge: {}
+  database:
+    internal: true
+  proxy:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${FINDIT_PROXY_SUBNET:-172.30.90.0/28}
+
+volumes:
+  postgres_data:
+  media_data:
+  caddy_data:
+  caddy_config:

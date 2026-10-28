@@ -1,0 +1,33 @@
+# Synthetic verification only. Requires Docker Compose 2.24.4+ for !override.
+services:
+  backend:
+    environment:
+      SSL_CERT_FILE: /test-ca.crt
+      FINDIT_E2E_STAFF_EMAIL: ${FINDIT_E2E_STAFF_EMAIL}
+      FINDIT_E2E_STAFF_PASSWORD: ${FINDIT_E2E_STAFF_PASSWORD}
+    volumes:
+      - ./work/container-verification/test-cert.crt:/test-ca.crt:ro
+    depends_on:
+      test-smtp:
+        condition: service_started
+  gateway:
+    ports: !override
+      - "127.0.0.1:${FINDIT_TEST_HTTPS_PORT}:443"
+    volumes:
+      - ./work/container-verification/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./work/container-verification/test-cert.crt:/test-cert.crt:ro
+      - ./work/container-verification/test-key.pem:/test-key.pem:ro
+  test-smtp:
+    build:
+      context: ./deploy/verification
+      dockerfile: Dockerfile.smtp
+    user: "${FINDIT_TEST_UID}:${FINDIT_TEST_GID}"
+    environment:
+      FINDIT_TEST_SMTP: "1"
+      FINDIT_TEST_MAIL_DIRECTORY: /mail
+    volumes:
+      - ./work/container-verification/mail:/mail
+      - ./work/container-verification/test-cert.crt:/test-cert.crt:ro
+      - ./work/container-verification/test-key.pem:/test-key.pem:ro
+    networks: [application]
+    security_opt: ["no-new-privileges:true"]
